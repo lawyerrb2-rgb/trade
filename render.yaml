@@ -1,5 +1,0 @@
-services:
-  - type: web
-    name: trading-journal
-    runtime: static
-    staticPublishPath: ./web
