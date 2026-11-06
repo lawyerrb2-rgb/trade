@@ -54,7 +54,7 @@ textarea{min-height:70px;resize:vertical}
 <header>
   <h1>Trading Journal</h1>
   <nav id="tabs"></nav>
-  <span><select id="range"><option value="7">7 วัน</option><option value="30" selected>30 วัน</option><option value="90">90 วัน</option><option value="0">ทั้งหมด</option></select>
+  <span><select id="acct" hidden></select> <select id="range"><option value="7">7 วัน</option><option value="30" selected>30 วัน</option><option value="90">90 วัน</option><option value="0">ทั้งหมด</option></select>
   <button id="out">ออกจากระบบ</button></span>
 </header>
 <div id="view"></div>
@@ -101,10 +101,16 @@ async function load() {
     if (error) { $("view").innerHTML = `<div class="panel loss">โหลดข้อมูลไม่ได้: ${esc(error.message)}</div>`; return; }
     all = all.concat(data); if (data.length < 1000) break; from += 1000;
   }
-  T = all.map(prep); render();
+  T = all.map(prep); fillAccts(); render();
 }
 
-const filtered = () => { const d = +$("range").value; const cut = d ? Date.now() - d * 864e5 : 0; return T.filter(x => new Date(x.close_time) >= cut); };
+function fillAccts() {
+  const s = $("acct"), cur = s.value, names = [...new Set(T.map(x => x.account))].sort();
+  s.innerHTML = '<option value="">ทุกบัญชี</option>' + names.map(n => `<option ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
+  s.hidden = names.length < 2;
+}
+const scope = () => T.filter(x => !$("acct").value || x.account === $("acct").value);
+const filtered = () => { const d = +$("range").value; const cut = d ? Date.now() - d * 864e5 : 0; return scope().filter(x => new Date(x.close_time) >= cut); };
 
 function render() {
   $("tabs").innerHTML = Object.entries(TABS).map(([k, v]) => `<button data-t="${k}" class="${k === tab ? "on" : ""}">${v}</button>`).join("");
@@ -134,7 +140,7 @@ function overview(F, v) {
 function calendar(_, v) {
   const y = calMonth.getFullYear(), mo = calMonth.getMonth(), days = new Date(y, mo + 1, 0).getDate(), first = new Date(y, mo, 1).getDay();
   const key = d => `${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  const byDay = {}; T.forEach(x => { if (x.day.startsWith(key(1).slice(0, 7))) (byDay[x.day] ??= []).push(x); });
+  const byDay = {}; scope().forEach(x => { if (x.day.startsWith(key(1).slice(0, 7))) (byDay[x.day] ??= []).push(x); });
   const maxAbs = Math.max(1, ...Object.values(byDay).map(a => Math.abs(sum(a, x => x.n))));
   const tot = stat(Object.values(byDay).flat());
   let cells = WD.map(d => `<div class="h">${d.slice(0, 2)}</div>`).join("") + "<div></div>".repeat(first);
@@ -154,7 +160,7 @@ function tbl(title, rows, label) {
 }
 
 function analysis(F, v) {
-  const sym = group(F, x => x.symbol).sort((a, b) => b.net - a.net), side = group(F, x => x.side).sort((a, b) => b.net - a.net);
+  const acc = group(F, x => x.account), sym = group(F, x => x.symbol).sort((a, b) => b.net - a.net), side = group(F, x => x.side).sort((a, b) => b.net - a.net);
   const hr = group(F, x => String(x.oh).padStart(2, "0")).sort((a, b) => a.k - b.k), wd = group(F, x => x.wd).sort((a, b) => a.k - b.k);
   const cand = [...sym.map(r => ["คู่/สัญลักษณ์ " + r.k, r]), ...side.map(r => ["ฝั่ง " + r.k.toUpperCase(), r]),
     ...hr.map(r => [`เข้าไม้ช่วง ${r.k}:00-${r.k}:59 น.`, r]), ...wd.map(r => ["วัน" + WD[r.k], r])].filter(([, r]) => r.n >= 5).sort((a, b) => b[1].avg - a[1].avg);
@@ -163,7 +169,7 @@ function analysis(F, v) {
   v.innerHTML = `<div class="panel ins"><h2>สรุปอัตโนมัติ <span class="mute" style="font-weight:400;font-size:13px">(เฉพาะกลุ่มที่มี ≥ 5 ไม้ · เวลาไทย)</span></h2>
     <b class="win">จุดแข็ง</b><ul>${good.map(li).join("") || "<li class='mute'>ยังไม่มีกลุ่มที่กำไรและมีไม้พอ</li>"}</ul>
     <b class="loss">จุดอ่อน</b><ul>${bad.map(li).join("") || "<li class='mute'>ยังไม่มีกลุ่มที่ขาดทุนและมีไม้พอ</li>"}</ul></div>` +
-    tbl("แยกตามคู่เงิน/สัญลักษณ์", sym, k => k) + tbl("แยกตามฝั่ง Buy / Sell", side, k => k.toUpperCase()) +
+    (acc.length > 1 ? tbl("แยกตามบัญชี", acc.sort((a, b) => b.net - a.net), k => k) : "") + tbl("แยกตามคู่เงิน/สัญลักษณ์", sym, k => k) + tbl("แยกตามฝั่ง Buy / Sell", side, k => k.toUpperCase()) +
     tbl("แยกตามชั่วโมงที่เข้าไม้ (เวลาไทย) · ดูความเร็วในการปิดกำไร/ขาดทุน", hr, k => k + ":00") + tbl("แยกตามวัน", wd, k => WD[k]);
 }
 
@@ -172,10 +178,10 @@ function journal(F, v) {
   const list = F.slice().reverse().filter(x => !only || !x.reviewed).slice(0, 100);
   v.innerHTML = `<div class="panel"><div style="display:flex;justify-content:space-between;margin-bottom:8px"><h2>รีวิวทีละออเดอร์</h2>
     <label><input type="checkbox" id="onlyNew" ${only ? "checked" : ""}> เฉพาะที่ยังไม่รีวิว</label></div>` +
-    (list.map(x => `<details><summary><span class="mute">${x.ct}</span><b>${esc(x.symbol)}</b><span class="${x.side === "buy" ? "win" : "loss"}">${x.side.toUpperCase()}</span>
+    (list.map(x => `<details><summary><span class="mute">${x.ct}</span><span class="mute">${esc(x.account)}</span><b>${esc(x.symbol)}</b><span class="${x.side === "buy" ? "win" : "loss"}">${x.side.toUpperCase()}</span>
       <b class="${cl(x.n)}">${m(x.n)}</b><span class="mute">${fd(x.dur)}</span>${x.reviewed ? "✓ รีวิวแล้ว" : ""}</summary>
       <div class="mute" style="margin-top:6px">ขั้นต้น ${m(x.g)} · คอมมิชชัน ${m(+x.commission)} · สวอป ${m(+x.swap)} · อื่นๆ ${m(+x.fee)} = <b class="${cl(x.n)}">กำไรจริง ${m(x.n)}</b></div>
-      <div class="form" data-id="${x.id}">
+      <div class="form" data-id="${x.id}" data-acc="${esc(x.account)}">
         <label>Setup / กลยุทธ์<input name="setup" value="${esc(x.setup)}"></label>
         <label>คุณภาพการเทรด (1-5)<select name="rating"><option value="">-</option>${[1,2,3,4,5].map(n => `<option ${x.rating == n ? "selected" : ""}>${n}</option>`).join("")}</select></label>
         <label class="full">เหตุผลที่เข้าไม้<textarea name="entry_reason">${esc(x.entry_reason)}</textarea></label>
@@ -189,15 +195,15 @@ document.addEventListener("click", async e => {
   if (t.dataset.t) { tab = t.dataset.t; render(); }
   if (t.dataset.m) { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + +t.dataset.m, 1); render(); }
   if (t.dataset.save !== undefined) {
-    const f = t.closest(".form"), id = f.dataset.id, g = n => f.querySelector(`[name=${n}]`).value.trim() || null;
+    const f = t.closest(".form"), id = f.dataset.id, acc = f.dataset.acc, g = n => f.querySelector(`[name=${n}]`).value.trim() || null;
     const patch = {setup: g("setup"), entry_reason: g("entry_reason"), mistake: g("mistake"), lesson: g("lesson"), rating: g("rating") ? +g("rating") : null, reviewed: true};
-    const {error} = await sb.from("trades").update(patch).eq("id", id);
+    const {error} = await sb.from("trades").update(patch).eq("id", id).eq("account", acc);
     f.querySelector("[data-msg]").textContent = error ? "ผิดพลาด: " + error.message : "บันทึกแล้ว";
-    if (!error) Object.assign(T.find(x => x.id == id), patch);
+    if (!error) Object.assign(T.find(x => x.id == id && x.account === acc), patch);
   }
 });
 document.addEventListener("change", e => { if (e.target.id === "onlyNew") render(); });
-$("range").onchange = render;
+$("range").onchange = render; $("acct").onchange = render;
 $("out").onclick = async () => { await sb.auth.signOut(); location.reload(); };
 $("login").onsubmit = async e => {
   e.preventDefault();
